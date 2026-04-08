@@ -1,0 +1,391 @@
+#!/usr/bin/env node
+
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { z } from "zod";
+
+const API_BASE = process.env.ICONS_API || "https://icons.pureadmin.io";
+
+const server = new McpServer({
+  name: "pure-admin-icons",
+  version: "1.0.0",
+});
+
+// --- Tools ---
+
+server.tool(
+  "get_usage_guide",
+  `Read this first if you're unsure how to use these tools.
+
+Returns a comprehensive guide explaining how to search icons effectively, what
+icon sets are available, how to filter results, and how to retrieve SVG content.
+Includes tips for choosing the right icon set and style for your use case.
+
+Call this tool at the start of a conversation when the user asks about icons,
+or whenever you're not sure which tool or parameters to use.`,
+  {},
+  async () => {
+    try {
+      const res = await fetch(`${API_BASE}/llms.txt`);
+      if (res.ok) {
+        const text = await res.text();
+        return { content: [{ type: "text", text }] };
+      }
+    } catch {
+      // fall through to fallback
+    }
+    return {
+      content: [
+        {
+          type: "text",
+          text: [
+            "icons.pureadmin.io — Icon search across 5 icon libraries",
+            "",
+            "ICON SETS:",
+            "  fluentui    — Microsoft FluentUI (5400+ icons, regular/filled/color/light, 16-48px)",
+            "  fontawesome — Font Awesome Free (2850+ icons, solid/regular/brands, scalable)",
+            "  heroicons   — Tailwind Heroicons (650 icons, outline/solid, 16/20/24px)",
+            "  lucide      — Lucide (1500+ icons, regular only, 24px, stroke-based)",
+            "  tabler      — Tabler Icons (5300+ icons, outline/filled, 24px)",
+            "",
+            "TOOLS:",
+            "  search_icons      — Find icons by name. Supports filters: set, style, size, limit.",
+            "  get_icon_detail   — Full metadata for one icon by ID (sizes, identifiers, color method).",
+            "  get_icon_svg      — Fetch raw SVG markup from a URL.",
+            "  list_icon_sets    — List all available sets with their styles, sizes, and counts.",
+            "",
+            "WORKFLOW:",
+            "  1. Call search_icons with a query (e.g., 'calendar')",
+            "  2. Pick an icon ID from results, call get_icon_detail for full info",
+            "  3. Use the svg_url from results with get_icon_svg to get the actual SVG markup",
+            "",
+            "TIPS:",
+            "  - Search by concept, not exact name: 'pencil', 'notification', 'chart'",
+            "  - Filter by set when the user mentions a specific library (e.g., 'heroicons calendar')",
+            "  - 'outline' and 'stroke-based' icons (Lucide, Tabler outline, Heroicons outline) use CSS stroke for color",
+            "  - 'filled' and 'solid' icons use CSS fill for color",
+            "  - FluentUI 'color' style is multicolor (gradients) — not recolorable",
+            "  - Each icon's style_color_method tells you which CSS property to use",
+          ].join("\n"),
+        },
+      ],
+    };
+  }
+);
+
+server.tool(
+  "search_icons",
+  `Search 16,000+ icons from FluentUI, Font Awesome, Heroicons, Lucide & Tabler.
+
+Returns a list of matching icons with names, styles, platform identifiers, and SVG URLs.
+Use format="text" for a concise listing, or format="json" for full metadata.
+
+Tips:
+- Search by concept, not exact name: "pencil", "notification", "chart"
+- Filter by icon set to narrow results: set="heroicons" or set="fontawesome"
+- Filter by style: style="outline", style="solid", style="filled", style="brands"
+- Each result includes an svg_url you can pass to get_icon_svg to retrieve the actual SVG
+- If unsure which set/style to use, call get_usage_guide first`,
+  {
+    query: z.string().describe("Search term (e.g., 'calendar', 'arrow', 'user')"),
+    set: z
+      .enum(["fluentui", "fontawesome", "heroicons", "lucide", "tabler"])
+      .optional()
+      .describe("Filter by icon set"),
+    style: z
+      .string()
+      .optional()
+      .describe(
+        "Filter by style: regular, filled, outline, solid, color, light, brands"
+      ),
+    size: z
+      .enum(["16", "20", "24", "28", "32", "48"])
+      .optional()
+      .describe("Filter by size in pixels"),
+    limit: z
+      .number()
+      .min(1)
+      .max(100)
+      .optional()
+      .default(20)
+      .describe("Max results (default: 20, max: 100)"),
+    format: z
+      .enum(["text", "json", "compact"])
+      .optional()
+      .default("text")
+      .describe(
+        "Response format: text (concise, best for AI), json (full metadata), compact (minimal)"
+      ),
+  },
+  async ({ query, set, style, size, limit, format }) => {
+    try {
+      const params = new URLSearchParams({
+        q: query,
+        format: format ?? "text",
+        limit: String(limit ?? 20),
+      });
+      if (set) params.append("set", set);
+      if (style) params.append("style", style);
+      if (size) params.append("size", size);
+
+      const res = await fetch(`${API_BASE}/api/icons/search?${params}`);
+      if (!res.ok)
+        return {
+          content: [
+            { type: "text", text: `Error: HTTP ${res.status} from API` },
+          ],
+          isError: true,
+        };
+
+      const text = await res.text();
+      return {
+        content: [
+          {
+            type: "text",
+            text:
+              text ||
+              "No icons found. Try a different search term or remove filters.",
+          },
+        ],
+      };
+    } catch (err) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error searching icons: ${err instanceof Error ? err.message : String(err)}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+  }
+);
+
+server.tool(
+  "get_icon_detail",
+  `Get full details for a specific icon by ID.
+
+Returns metadata including all available sizes, filenames, platform identifiers
+(iOS, Android, React, Vue, Svelte), categories, search phrases, and SVG URLs.
+Also includes style_color_method ("fill", "stroke", or "multicolor") indicating
+how to set the icon color via CSS.
+
+Use icon IDs from search_icons results.
+If unsure how to use this output, call get_usage_guide for the full workflow.`,
+  {
+    id: z.number().describe("Icon ID from search results"),
+  },
+  async ({ id }) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/icons/${id}`);
+      if (!res.ok) {
+        if (res.status === 404)
+          return {
+            content: [{ type: "text", text: `Icon with ID ${id} not found.` }],
+            isError: true,
+          };
+        return {
+          content: [
+            { type: "text", text: `Error: HTTP ${res.status} from API` },
+          ],
+          isError: true,
+        };
+      }
+
+      const data = await res.json();
+      const icon = data.icon;
+
+      // Format a readable summary
+      const lines = [
+        `${icon.name} (${icon.icon_set} / ${icon.style})`,
+        `Color method: ${icon.style_color_method || "unknown"}`,
+        `Sizes: ${icon.sizes.join(", ")}px`,
+        "",
+        "SVG URLs:",
+        ...icon.svg_urls.map(
+          (s: { size: number; url: string }) =>
+            `  ${s.size}px: ${API_BASE}${s.url}`
+        ),
+      ];
+
+      if (icon.ios && Object.keys(icon.ios).length > 0) {
+        lines.push("", "iOS identifiers:");
+        for (const [sz, id] of Object.entries(icon.ios))
+          lines.push(`  ${sz}px: ${id}`);
+      }
+
+      if (icon.android && Object.keys(icon.android).length > 0) {
+        lines.push("", "Android identifiers:");
+        for (const [sz, id] of Object.entries(icon.android))
+          lines.push(`  ${sz}px: ${id}`);
+      }
+
+      if (icon.phrases && icon.phrases.length > 0) {
+        lines.push(
+          "",
+          "Search phrases:",
+          ...icon.phrases.map(
+            (p: { phrase: string; source: string }) =>
+              `  ${p.phrase} (${p.source})`
+          )
+        );
+      }
+
+      return { content: [{ type: "text", text: lines.join("\n") }] };
+    } catch (err) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error fetching icon: ${err instanceof Error ? err.message : String(err)}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+  }
+);
+
+server.tool(
+  "get_icon_svg",
+  `Fetch the raw SVG content of an icon.
+
+Pass an SVG URL from search results or icon detail. Returns the SVG markup
+that can be used directly in HTML, saved to a file, or embedded in components.
+
+Accepts both relative URLs (/icons/...) and full URLs.
+For the full search → detail → svg workflow, call get_usage_guide first.`,
+  {
+    url: z
+      .string()
+      .describe("SVG URL from search results (e.g., /icons/heroicons/outline/arrow-right-24.svg)"),
+  },
+  async ({ url }) => {
+    try {
+      const fullUrl = url.startsWith("http") ? url : `${API_BASE}${url}`;
+      const res = await fetch(fullUrl);
+      if (!res.ok)
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error fetching SVG: HTTP ${res.status}. Check the URL is correct.`,
+            },
+          ],
+          isError: true,
+        };
+
+      const svg = await res.text();
+      return { content: [{ type: "text", text: svg }] };
+    } catch (err) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error fetching SVG: ${err instanceof Error ? err.message : String(err)}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+  }
+);
+
+server.tool(
+  "list_icon_sets",
+  `List all available icon sets with metadata.
+
+Returns each icon set's name, available styles, sizes, color methods, license, and icon count.
+Useful for discovering what's available before searching.
+For a guided introduction to all tools, call get_usage_guide instead.`,
+  {},
+  async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/icon-sets`);
+      if (!res.ok)
+        return {
+          content: [
+            { type: "text", text: `Error: HTTP ${res.status} from API` },
+          ],
+          isError: true,
+        };
+
+      const data = await res.json();
+      const lines = data.icon_sets.map(
+        (s: {
+          code: string;
+          title: string;
+          styles: string[];
+          sizes: number[];
+          style_color_methods: Record<string, string>;
+          icon_count: number;
+          license: string;
+        }) =>
+          [
+            `${s.title} (${s.code}) — ${s.icon_count} icons`,
+            `  Styles: ${s.styles.join(", ")}`,
+            `  Sizes: ${s.sizes.join(", ")}px`,
+            `  Color methods: ${Object.entries(s.style_color_methods).map(([k, v]) => `${k}=${v}`).join(", ")}`,
+            `  License: ${s.license}`,
+          ].join("\n")
+      );
+
+      return { content: [{ type: "text", text: lines.join("\n\n") }] };
+    } catch (err) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error listing icon sets: ${err instanceof Error ? err.message : String(err)}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+  }
+);
+
+// --- Resources ---
+
+server.resource("api-docs", "icons://docs", async (uri) => {
+  try {
+    const res = await fetch(`${API_BASE}/llms.txt`);
+    const text = await res.text();
+    return {
+      contents: [{ uri: uri.href, mimeType: "text/plain", text }],
+    };
+  } catch {
+    return {
+      contents: [
+        {
+          uri: uri.href,
+          mimeType: "text/plain",
+          text: [
+            "icons.pureadmin.io API",
+            "",
+            "Search: GET /api/icons/search?q={query}&set={set}&style={style}&size={size}&limit={n}&format={text|json|compact}",
+            "Detail: GET /api/icons/{id}",
+            "Sets:   GET /api/icon-sets",
+            "SVG:    GET /icons/{set}/{style}/{filename}.svg",
+            "Health: GET /api/health",
+            "",
+            "Icon sets: fluentui, fontawesome, heroicons, lucide, tabler",
+            "Styles: regular, filled, outline, solid, color, light, brands",
+            "Sizes: 16, 20, 24, 28, 32, 48 (varies by set)",
+          ].join("\n"),
+        },
+      ],
+    };
+  }
+});
+
+// --- Start ---
+
+async function main() {
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+  console.error("Pure Admin Icons MCP server running");
+}
+
+main().catch(console.error);
