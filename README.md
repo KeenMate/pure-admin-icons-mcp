@@ -8,6 +8,7 @@ Search across **FluentUI**, **Font Awesome**, **Heroicons**, **Lucide**, and **T
 
 | Tool | Description |
 |------|-------------|
+| `get_usage_guide` | Read first if unsure how to use the server. Returns icon set overview, workflow, and tips. |
 | `search_icons` | Search icons by name with filters for set, style, size. Returns names + SVG URLs. |
 | `get_icon_detail` | Get full metadata for an icon: all sizes, platform identifiers, color method, phrases. |
 | `get_icon_svg` | Fetch raw SVG content from a URL. |

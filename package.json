@@ -33,7 +33,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git@github.com:KeenMate/pure-admin-icons-mcp.git"
+    "url": "git+ssh://git@github.com/KeenMate/pure-admin-icons-mcp.git"
   },
   "homepage": "https://icons.pureadmin.io",
   "dependencies": {
