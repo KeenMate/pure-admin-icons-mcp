@@ -4,6 +4,12 @@ MCP server for searching 16,000+ open-source SVG icons from [icons.pureadmin.io]
 
 Search across **FluentUI**, **Font Awesome**, **Heroicons**, **Lucide**, and **Tabler** icon sets with a single tool. Get platform identifiers for iOS, Android, React, Vue, and Svelte.
 
+## What's new in v1.0.1
+
+- `get_icon_svg` now routes through `/api/download/...` so each explicit fetch is counted in icons.pureadmin.io usage stats. Direct `/icons/...` URLs in search results stay untracked (those are for `<img>` rendering).
+- Accepts both relative (`/icons/...`) and absolute URLs.
+- README tool table now lists `get_usage_guide`.
+
 ## Tools
 
 | Tool | Description |
