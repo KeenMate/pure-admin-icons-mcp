@@ -6,6 +6,20 @@ import { z } from "zod";
 
 const API_BASE = process.env.ICONS_API || "https://icons.pureadmin.io";
 
+// Rewrites the public /icons/{set}/{style}/{filename} path used in search
+// result URLs to /api/download/{set}/{style}/{filename}, which serves the
+// same SVG but also records the download in icons.pureadmin.io stats.
+// Passes through anything that doesn't match either shape unchanged.
+function rewriteToTrackedDownload(url: string): string {
+  if (url.startsWith("/icons/")) {
+    return "/api/download/" + url.slice("/icons/".length);
+  }
+  if (/^https?:\/\/[^/]+\/icons\//.test(url)) {
+    return url.replace(/(^https?:\/\/[^/]+)\/icons\//, "$1/api/download/");
+  }
+  return url;
+}
+
 const server = new McpServer({
   name: "pure-admin-icons",
   version: "1.0.0",
@@ -254,7 +268,10 @@ server.tool(
 Pass an SVG URL from search results or icon detail. Returns the SVG markup
 that can be used directly in HTML, saved to a file, or embedded in components.
 
-Accepts both relative URLs (/icons/...) and full URLs.
+Accepts both relative URLs (/icons/...) and full URLs. Internally routes
+through /api/download/... so each retrieval is recorded as a download in
+the icons.pureadmin.io usage stats.
+
 For the full search → detail → svg workflow, call get_usage_guide first.`,
   {
     url: z
@@ -263,7 +280,12 @@ For the full search → detail → svg workflow, call get_usage_guide first.`,
   },
   async ({ url }) => {
     try {
-      const fullUrl = url.startsWith("http") ? url : `${API_BASE}${url}`;
+      // Search results surface /icons/{set}/{style}/{filename} for direct render
+      // (which is intentionally untracked — used by <img> tags). When the AI
+      // explicitly fetches an SVG via this tool, that's a deliberate download,
+      // so we route through /api/download/... which records an icon_metric row.
+      const trackedUrl = rewriteToTrackedDownload(url);
+      const fullUrl = trackedUrl.startsWith("http") ? trackedUrl : `${API_BASE}${trackedUrl}`;
       const res = await fetch(fullUrl);
       if (!res.ok)
         return {
